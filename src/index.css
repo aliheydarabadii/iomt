@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  color: #0f172a;
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
+    radial-gradient(circle at left center, rgba(2, 132, 199, 0.08), transparent 30%),
+    linear-gradient(180deg, #f4f8fb 0%, #e6edf5 100%);
+  font-family:
+    "IBM Plex Sans",
+    "Instrument Sans",
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
+    radial-gradient(circle at left center, rgba(2, 132, 199, 0.08), transparent 30%),
+    linear-gradient(180deg, #f4f8fb 0%, #e6edf5 100%);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font: inherit;
+}
+
+code,
+pre {
+  font-family:
+    "JetBrains Mono",
+    "SFMono-Regular",
+    ui-monospace,
+    monospace;
+}
