@@ -79,6 +79,44 @@ function buildPath(points) {
     .join(" ");
 }
 
+// Chrome disables the native <audio> play button when it cannot determine the
+// media format, which happens when the server serves the file without a real
+// audio Content-Type. We sniff the format from the leading magic bytes so we
+// can hand the element a blob URL with a correct MIME type instead.
+function sniffAudioMimeType(bytes, fallbackType) {
+  if (bytes.length >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) {
+    return "audio/wav"; // RIFF....WAVE
+  }
+  if (bytes.length >= 4 &&
+    bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return "audio/ogg"; // OggS
+  }
+  if (bytes.length >= 4 &&
+    bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) {
+    return "audio/flac"; // fLaC
+  }
+  if (bytes.length >= 8 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    return "audio/mp4"; // ....ftyp (m4a/aac)
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return "audio/mpeg"; // ID3 (mp3)
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) {
+    return "audio/mpeg"; // MPEG audio frame sync
+  }
+
+  if (fallbackType && fallbackType !== "application/octet-stream") {
+    return fallbackType;
+  }
+
+  // Recordings come off the BLE capture as WAV, so default to that when the
+  // header is unrecognized rather than leaving the type empty (= disabled).
+  return "audio/wav";
+}
+
 export default function RecordingWaveform({ audioUrl }) {
   const audioRef = useRef(null);
   const animationFrameRef = useRef(0);
@@ -88,6 +126,7 @@ export default function RecordingWaveform({ audioUrl }) {
     points: createPlaceholderPoints(),
     status: "loading",
   });
+  const [audioSrc, setAudioSrc] = useState("");
   const [mediaDuration, setMediaDuration] = useState(0);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -96,6 +135,7 @@ export default function RecordingWaveform({ audioUrl }) {
     if (!audioUrl) return undefined;
 
     let cancelled = false;
+    let objectUrl = "";
     let audioContext = null;
     const controller = new AbortController();
 
@@ -105,6 +145,7 @@ export default function RecordingWaveform({ audioUrl }) {
         points: createPlaceholderPoints(),
         status: "loading",
       });
+      setAudioSrc("");
 
       try {
         const response = await fetch(audioUrl, {
@@ -119,7 +160,16 @@ export default function RecordingWaveform({ audioUrl }) {
         }
 
         const blob = await response.blob();
+        const arrayBuffer = await blob.arrayBuffer();
         if (cancelled) return;
+
+        // Re-wrap the bytes with a sniffed audio MIME type and play from that
+        // blob URL, so the element's play button works regardless of the
+        // Content-Type the server returned.
+        const header = new Uint8Array(arrayBuffer.slice(0, 16));
+        const mimeType = sniffAudioMimeType(header, blob.type);
+        objectUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: mimeType }));
+        setAudioSrc(objectUrl);
 
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
@@ -133,7 +183,8 @@ export default function RecordingWaveform({ audioUrl }) {
         }
 
         audioContext = new AudioContextClass();
-        const decoded = await audioContext.decodeAudioData(await blob.arrayBuffer());
+        // decodeAudioData detaches its buffer, so hand it a private copy.
+        const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
         if (cancelled) return;
 
         setChartState({
@@ -161,6 +212,10 @@ export default function RecordingWaveform({ audioUrl }) {
     return () => {
       cancelled = true;
       controller.abort();
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
 
       if (audioContext && audioContext.state !== "closed") {
         audioContext.close().catch(() => {});
@@ -447,7 +502,7 @@ export default function RecordingWaveform({ audioUrl }) {
         ref={audioRef}
         controls
         preload="metadata"
-        src={audioUrl}
+        src={audioSrc || audioUrl}
         className="mt-4 w-full"
         onEnded={handleAudioEnded}
         onLoadedMetadata={handleAudioLoadedMetadata}
