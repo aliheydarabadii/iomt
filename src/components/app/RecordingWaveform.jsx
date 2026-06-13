@@ -84,7 +84,6 @@ export default function RecordingWaveform({ audioUrl }) {
   const animationFrameRef = useRef(0);
   const clipPathId = useId().replace(/:/g, "");
   const [chartState, setChartState] = useState({
-    audioSrc: audioUrl,
     durationSeconds: 0,
     points: createPlaceholderPoints(),
     status: "loading",
@@ -97,13 +96,11 @@ export default function RecordingWaveform({ audioUrl }) {
     if (!audioUrl) return undefined;
 
     let cancelled = false;
-    let objectUrl = "";
     let audioContext = null;
     const controller = new AbortController();
 
     async function loadWaveform() {
       setChartState({
-        audioSrc: audioUrl,
         durationSeconds: 0,
         points: createPlaceholderPoints(),
         status: "loading",
@@ -124,12 +121,10 @@ export default function RecordingWaveform({ audioUrl }) {
         const blob = await response.blob();
         if (cancelled) return;
 
-        objectUrl = URL.createObjectURL(blob);
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
         if (!AudioContextClass) {
           setChartState({
-            audioSrc: objectUrl,
             durationSeconds: 0,
             points: createPlaceholderPoints(),
             status: "unsupported",
@@ -142,7 +137,6 @@ export default function RecordingWaveform({ audioUrl }) {
         if (cancelled) return;
 
         setChartState({
-          audioSrc: objectUrl,
           durationSeconds: decoded.duration,
           points: extractWaveform(decoded),
           status: "ready",
@@ -151,7 +145,6 @@ export default function RecordingWaveform({ audioUrl }) {
         if (cancelled || controller.signal.aborted) return;
 
         setChartState({
-          audioSrc: audioUrl,
           durationSeconds: 0,
           points: createPlaceholderPoints(),
           status: "error",
@@ -169,10 +162,6 @@ export default function RecordingWaveform({ audioUrl }) {
       cancelled = true;
       controller.abort();
 
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-
       if (audioContext && audioContext.state !== "closed") {
         audioContext.close().catch(() => {});
       }
@@ -183,7 +172,7 @@ export default function RecordingWaveform({ audioUrl }) {
     setMediaDuration(0);
     setPlaybackTime(0);
     setIsPlaying(false);
-  }, [chartState.audioSrc]);
+  }, [audioUrl]);
 
   useEffect(() => {
     return () => {
@@ -458,7 +447,7 @@ export default function RecordingWaveform({ audioUrl }) {
         ref={audioRef}
         controls
         preload="metadata"
-        src={chartState.audioSrc}
+        src={audioUrl}
         className="mt-4 w-full"
         onEnded={handleAudioEnded}
         onLoadedMetadata={handleAudioLoadedMetadata}
