@@ -8,9 +8,19 @@ const PATIENT_CREATE_ENDPOINT =
 const MEASUREMENT_ENDPOINT =
   import.meta.env.VITE_HEART_MEASUREMENT_ENDPOINT ||
   "/api/heart-measurements/current";
-const RECORDING_ENDPOINT_TEMPLATE =
-  import.meta.env.VITE_HEART_RECORDING_ENDPOINT_TEMPLATE ||
-  "/api/heart-measurements/:patientId/recording";
+const RECORD_ENDPOINT_TEMPLATE =
+  import.meta.env.VITE_HEART_RECORD_ENDPOINT_TEMPLATE ||
+  "/api/heart-measurements/:patientId/record";
+// Fixed-duration capture run by the BLE sensor (Arduino). The record request
+// blocks for this long, so the UI shows a busy state for the whole window.
+const RECORD_DURATION_SECONDS = Number(
+  import.meta.env.VITE_HEART_RECORD_DURATION_SECONDS || 60,
+);
+// Must stay well above the record duration or the blocking call will appear to
+// fail while the backend is still capturing.
+const RECORD_REQUEST_TIMEOUT_MS = Number(
+  import.meta.env.VITE_HEART_RECORD_REQUEST_TIMEOUT_MS || 90000,
+);
 const RECORDING_AUDIO_ENDPOINT_TEMPLATE =
   import.meta.env.VITE_HEART_RECORDING_AUDIO_ENDPOINT_TEMPLATE ||
   "/api/heart-recordings/:recordId/audio";
@@ -69,11 +79,8 @@ const EMPTY_MEASUREMENT = {
   },
   controls: {
     canRecord: false,
-    canStop: false,
     recordUrl: "",
-    stopUrl: "",
     recordMethod: "POST",
-    stopMethod: "POST",
   },
   records: [],
 };
@@ -90,8 +97,10 @@ export {
   PATIENT_CREATE_ENDPOINT,
   PATIENT_SEARCH_ENDPOINT,
   POLL_INTERVAL_MS,
+  RECORD_DURATION_SECONDS,
+  RECORD_ENDPOINT_TEMPLATE,
+  RECORD_REQUEST_TIMEOUT_MS,
   RECORDING_AUDIO_ENDPOINT_TEMPLATE,
-  RECORDING_ENDPOINT_TEMPLATE,
   WAVEFORM_POINT_COUNT,
   createIdleWaveform,
   getInitialCreateForm,

@@ -91,15 +91,11 @@ function normalizeMeasurementResponse(payload) {
   const controls = payload.controls || payload.actions || {};
   const records = Array.isArray(payload.records) ? payload.records : [];
   const isRecording = Boolean(session.isRecording);
-  const sharedRecordingUrl = controls.recordingUrl || controls.url || "";
-  const sharedRecordingMethod =
-    controls.recordingMethod || controls.method || "POST";
+  const sharedRecordingUrl = controls.recordUrl || controls.url || "";
+  const sharedRecordingMethod = controls.recordMethod || controls.method || "POST";
   const hasRecordControl =
     controls.canRecord !== undefined ||
     Boolean(controls.recordUrl || controls.record?.url || sharedRecordingUrl);
-  const hasStopControl =
-    controls.canStop !== undefined ||
-    Boolean(controls.stopUrl || controls.stop?.url || sharedRecordingUrl);
 
   return {
     sourceLabel: payload.sourceLabel || payload.source || "REST endpoint",
@@ -121,20 +117,9 @@ function normalizeMeasurementResponse(payload) {
               sharedRecordingUrl,
           )
         : !isRecording,
-      canStop: hasStopControl
-        ? Boolean(
-            controls.canStop ??
-              controls.stopUrl ??
-              controls.stop?.url ??
-              sharedRecordingUrl,
-          )
-        : isRecording,
       recordUrl: controls.recordUrl || controls.record?.url || sharedRecordingUrl,
-      stopUrl: controls.stopUrl || controls.stop?.url || sharedRecordingUrl,
       recordMethod:
         controls.recordMethod || controls.record?.method || sharedRecordingMethod,
-      stopMethod:
-        controls.stopMethod || controls.stop?.method || sharedRecordingMethod,
     },
     records: records.map(normalizeRecord),
   };

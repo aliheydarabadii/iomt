@@ -7,7 +7,8 @@ import {
   MEASUREMENT_ENDPOINT,
   PATIENT_CREATE_ENDPOINT,
   PATIENT_SEARCH_ENDPOINT,
-  RECORDING_ENDPOINT_TEMPLATE,
+  RECORD_ENDPOINT_TEMPLATE,
+  RECORD_REQUEST_TIMEOUT_MS,
 } from "@/lib/config";
 import {
   normalizeMeasurementResponse,
@@ -26,9 +27,31 @@ async function readJsonBody(response) {
   }
 }
 
+// Friendly copy for the documented record error codes. Falls back to the
+// server-provided message for anything not listed here.
+const RECORD_ERROR_MESSAGES = {
+  invalid_area_id: "That auscultation site is not valid.",
+  patient_not_found: "This patient could not be found on the server.",
+  recording_already_running:
+    "A recording is already in progress for this patient.",
+  ble_device_busy: "The sensor is currently streaming to another patient.",
+  no_ble_audio_captured:
+    "The capture finished but no audio arrived from the sensor. Check the sensor and try again.",
+};
+
 function getResponseErrorMessage(body, fallback) {
   if (body && typeof body === "object") {
-    return body.message || body.error || fallback;
+    // New error envelope: { error: { code, message, details } }.
+    if (body.error && typeof body.error === "object") {
+      const { code, message } = body.error;
+      return RECORD_ERROR_MESSAGES[code] || message || fallback;
+    }
+
+    if (typeof body.error === "string" && body.error.trim()) {
+      return body.error;
+    }
+
+    return body.message || fallback;
   }
 
   if (typeof body === "string" && body.trim()) {
@@ -62,11 +85,11 @@ function withQuery(url, params) {
   return resolved.toString();
 }
 
-function buildRecordingActionUrl(patientId) {
+function buildRecordEndpointUrl(patientId) {
   if (!patientId) return "";
 
   return resolveApiUrl(
-    RECORDING_ENDPOINT_TEMPLATE.replace(":patientId", encodeURIComponent(patientId)),
+    RECORD_ENDPOINT_TEMPLATE.replace(":patientId", encodeURIComponent(patientId)),
   );
 }
 
@@ -183,9 +206,9 @@ async function fetchMeasurement(patient, signal) {
   }
 
   const normalized = normalizeMeasurementResponse((await readJsonBody(response)) || {});
-  const fallbackRecordingUrl = buildRecordingActionUrl(patient?.id);
+  const fallbackRecordUrl = buildRecordEndpointUrl(patient?.id);
 
-  if (!fallbackRecordingUrl) {
+  if (!fallbackRecordUrl) {
     return normalized;
   }
 
@@ -193,32 +216,57 @@ async function fetchMeasurement(patient, signal) {
     ...normalized,
     controls: {
       ...normalized.controls,
-      recordUrl: fallbackRecordingUrl,
-      stopUrl: fallbackRecordingUrl,
-      recordMethod: "POST",
-      stopMethod: "POST",
+      recordUrl: normalized.controls.recordUrl || fallbackRecordUrl,
+      recordMethod: normalized.controls.recordMethod || "POST",
     },
   };
 }
 
-async function performControlAction(url, method, payload) {
-  const response = await fetch(resolveApiUrl(url), {
-    method,
-    headers: {
-      Accept: "application/json",
-      ...(payload ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(payload ? { body: JSON.stringify(payload) } : {}),
-  });
+// Single fixed-duration capture. This request BLOCKS until the Arduino finishes
+// recording and the backend stores the result (no separate stop call). Native
+// fetch has no default timeout, so we add an AbortController guard set well
+// above the record duration to avoid hanging forever on a stalled sensor.
+async function recordMeasurement(patientId, areaId, { url } = {}) {
+  const recordUrl = url ? resolveApiUrl(url) : buildRecordEndpointUrl(patientId);
+
+  if (!recordUrl) {
+    throw new Error("Missing patient id for the record request.");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), RECORD_REQUEST_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(recordUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ areaId }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "The recording request timed out before the sensor responded.",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const body = await readJsonBody(response);
 
   if (!response.ok) {
-    const body = await readJsonBody(response);
     throw new Error(
-      getResponseErrorMessage(body, `Control action failed with ${response.status}`),
+      getResponseErrorMessage(body, `Recording failed with ${response.status}`),
     );
   }
 
-  return readJsonBody(response);
+  return body;
 }
 
 async function runRecordingAnalysis(recordId) {
@@ -245,9 +293,9 @@ async function runRecordingAnalysis(recordId) {
 
 export {
   buildRecordingAnalyticsUrl,
-  buildRecordingActionUrl,
+  buildRecordEndpointUrl,
   fetchMeasurement,
-  performControlAction,
+  recordMeasurement,
   resolveApiUrl,
   runRecordingAnalysis,
   searchPatientsByName,

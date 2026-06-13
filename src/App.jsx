@@ -3,13 +3,14 @@ import { HEART_AUSCULTATION_AREAS } from "@/components/HeartAuscultationMap";
 import {
   createPatient,
   fetchMeasurement,
-  performControlAction,
+  recordMeasurement,
   searchPatientsByName,
 } from "@/lib/api";
 import {
   DEFAULT_SELECTED_ID,
   EMPTY_MEASUREMENT,
   POLL_INTERVAL_MS,
+  RECORD_DURATION_SECONDS,
   getInitialCreateForm,
 } from "@/lib/config";
 import LookupPage from "@/pages/LookupPage";
@@ -32,7 +33,8 @@ export default function App() {
   const [selectedAreaId, setSelectedAreaId] = useState(DEFAULT_SELECTED_ID);
   const [isMeasurementLoading, setIsMeasurementLoading] = useState(false);
   const [measurementError, setMeasurementError] = useState("");
-  const [pendingAction, setPendingAction] = useState("");
+  const [isRecordPending, setIsRecordPending] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
 
   const selectedArea = useMemo(() => {
     const activeAreaId =
@@ -98,6 +100,19 @@ export default function App() {
       window.clearInterval(intervalId);
     };
   }, [currentPage, selectedPatient]);
+
+  // Drive the "Recording… (N seconds)" busy state while the blocking record
+  // request is in flight.
+  useEffect(() => {
+    if (!isRecordPending) return undefined;
+
+    setRecordSeconds(0);
+    const intervalId = window.setInterval(() => {
+      setRecordSeconds((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isRecordPending]);
 
   async function handleSearch(event) {
     event.preventDefault();
@@ -170,19 +185,21 @@ export default function App() {
     }
   }
 
-  async function runControlAction(url, method, actionName) {
-    if (!url || !selectedPatient || pendingAction) return;
+  async function handleRecord() {
+    if (!selectedPatient || isRecordPending) return;
 
-    setPendingAction(actionName);
+    const recordUrl = measurement.controls.recordUrl;
+    const areaId = selectedArea.id;
+
+    setIsRecordPending(true);
     setMeasurementError("");
 
     try {
-      const payload =
-        actionName === "record"
-          ? { action: "start", areaId: selectedArea.id }
-          : { action: "stop" };
+      // Blocks for the full fixed-duration capture, then the recording is
+      // already stored on the server when this resolves.
+      await recordMeasurement(selectedPatient.id, areaId, { url: recordUrl });
 
-      await performControlAction(url, method, payload);
+      // Refresh to pull in the freshly stored recording and updated session.
       const nextMeasurement = await fetchMeasurement(selectedPatient);
       setMeasurement(nextMeasurement);
       if (nextMeasurement.currentSession.isRecording) {
@@ -190,10 +207,10 @@ export default function App() {
       }
     } catch (error) {
       setMeasurementError(
-        error instanceof Error ? error.message : `Unable to ${actionName}.`,
+        error instanceof Error ? error.message : "Unable to record.",
       );
     } finally {
-      setPendingAction("");
+      setIsRecordPending(false);
     }
   }
 
@@ -249,8 +266,10 @@ export default function App() {
       onAreaChange={setSelectedAreaId}
       isLoading={isMeasurementLoading}
       errorMessage={measurementError}
-      pendingAction={pendingAction}
-      onRunAction={runControlAction}
+      isRecordPending={isRecordPending}
+      recordSeconds={recordSeconds}
+      recordDurationSeconds={RECORD_DURATION_SECONDS}
+      onRecord={handleRecord}
       onBack={() => setCurrentPage("lookup")}
     />
   );

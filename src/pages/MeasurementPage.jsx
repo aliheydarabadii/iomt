@@ -45,8 +45,10 @@ export default function MeasurementPage({
   onAreaChange,
   isLoading,
   errorMessage,
-  pendingAction,
-  onRunAction,
+  isRecordPending,
+  recordSeconds,
+  recordDurationSeconds,
+  onRecord,
   onBack,
 }) {
   if (!patient) return null;
@@ -100,6 +102,10 @@ export default function MeasurementPage({
     }
   }
 
+  // The blocking record call locks the session before the first /current poll
+  // reflects isRecording, so treat the in-flight request as an active session.
+  const sessionActive = measurement.currentSession.isRecording || isRecordPending;
+
   return (
     <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
@@ -139,7 +145,7 @@ export default function MeasurementPage({
                   {patient.sex ? <DetailChip>{patient.sex}</DetailChip> : null}
                   {patient.age ? <DetailChip>Age {patient.age}</DetailChip> : null}
                   <DetailChip tone="emerald">
-                    {measurement.currentSession.isRecording ? "Recording active" : "Session idle"}
+                    {sessionActive ? "Recording active" : "Session idle"}
                   </DetailChip>
                 </div>
               </div>
@@ -149,9 +155,7 @@ export default function MeasurementPage({
                   label="Selected Site"
                   value={selectedArea.label}
                   detail={
-                    measurement.currentSession.isRecording
-                      ? "Locked by active session"
-                      : selectedArea.short
+                    sessionActive ? "Locked by active session" : selectedArea.short
                   }
                 />
                 <SummaryTile
@@ -197,7 +201,7 @@ export default function MeasurementPage({
                 referenceImageSrc={referenceImage}
                 defaultSelectedId={DEFAULT_SELECTED_ID}
                 selectedAreaId={selectedAreaId}
-                selectionLocked={measurement.currentSession.isRecording}
+                selectionLocked={sessionActive}
                 onAreaClick={(area) => onAreaChange(area.id)}
               />
 
@@ -264,12 +268,12 @@ export default function MeasurementPage({
                     <span
                       className={[
                         "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-                        measurement.currentSession.isRecording
+                        sessionActive
                           ? "bg-rose-500/20 text-rose-100"
                           : "bg-white/10 text-slate-200",
                       ].join(" ")}
                     >
-                      {measurement.currentSession.isRecording ? "Recording" : "Idle"}
+                      {sessionActive ? "Recording" : "Idle"}
                     </span>
                   </div>
 
@@ -294,17 +298,11 @@ export default function MeasurementPage({
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                  <div className="grid gap-3">
                     <button
                       type="button"
-                      disabled={!measurement.controls.canRecord || pendingAction !== ""}
-                      onClick={() =>
-                        onRunAction(
-                          measurement.controls.recordUrl,
-                          measurement.controls.recordMethod,
-                          "record",
-                        )
-                      }
+                      disabled={!measurement.controls.canRecord || isRecordPending}
+                      onClick={onRecord}
                       className="inline-flex items-center justify-center gap-2 rounded-[20px] bg-[#a61e2e] px-4 py-4 text-sm font-semibold text-white transition-colors hover:bg-[#911827] disabled:cursor-not-allowed disabled:bg-rose-300"
                     >
                       <svg
@@ -315,38 +313,25 @@ export default function MeasurementPage({
                       >
                         <circle cx="10" cy="10" r="5.5" />
                       </svg>
-                      {pendingAction === "record" ? "Sending..." : "Record"}
+                      {isRecordPending
+                        ? `Recording… (${recordSeconds}s)`
+                        : "Record"}
                     </button>
 
-                    <button
-                      type="button"
-                      disabled={!measurement.controls.canStop || pendingAction !== ""}
-                      onClick={() =>
-                        onRunAction(
-                          measurement.controls.stopUrl,
-                          measurement.controls.stopMethod,
-                          "stop",
-                        )
-                      }
-                      className="inline-flex items-center justify-center gap-2 rounded-[20px] bg-white px-4 py-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-300"
-                    >
-                      <svg
-                        viewBox="0 0 20 20"
-                        className="h-5 w-5"
-                        aria-hidden="true"
-                        fill="currentColor"
-                      >
-                        <rect x="5.5" y="5.5" width="9" height="9" rx="1.5" />
-                      </svg>
-                      {pendingAction === "stop" ? "Sending..." : "Stop"}
-                    </button>
+                    {isRecordPending ? (
+                      <p className="text-center text-sm text-slate-300">
+                        Capturing a fixed {recordDurationSeconds}s sample from the
+                        sensor. The recording stops on its own and saves
+                        automatically.
+                      </p>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
 
               <SignalStrip
                 history={measurement.currentSession.waveform}
-                isRecording={measurement.currentSession.isRecording}
+                isRecording={sessionActive}
               />
 
               {errorMessage ? (
