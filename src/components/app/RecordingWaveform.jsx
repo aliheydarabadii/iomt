@@ -30,19 +30,18 @@ function formatDurationLabel(seconds) {
   return `${minutes}:${remainingSeconds}`;
 }
 
-function extractWaveform(audioBuffer) {
-  const channelData = Array.from(
-    { length: audioBuffer.numberOfChannels },
-    (_, index) => audioBuffer.getChannelData(index),
-  );
-  const bucketSize = Math.max(1, Math.floor(audioBuffer.length / POINT_COUNT));
+function extractWaveformPoints(channelData) {
+  const length = channelData.length ? channelData[0].length : 0;
+  if (!length) return createPlaceholderPoints();
+
+  const bucketSize = Math.max(1, Math.floor(length / POINT_COUNT));
 
   return Array.from({ length: POINT_COUNT }, (_, index) => {
     const start = index * bucketSize;
     const end =
       index === POINT_COUNT - 1
-        ? audioBuffer.length
-        : Math.min(audioBuffer.length, start + bucketSize);
+        ? length
+        : Math.min(length, start + bucketSize);
     const stride = Math.max(1, Math.floor((end - start) / 32));
     let min = 1;
     let max = -1;
@@ -117,14 +116,130 @@ function sniffAudioMimeType(bytes, fallbackType) {
   return "audio/wav";
 }
 
-// Heart recordings are captured at a very low sample rate (e.g. 500 Hz), which
-// Chrome's <audio> element refuses to play, leaving the play button disabled.
-// decodeAudioData resamples the data to the AudioContext rate (44.1/48 kHz), so
-// we re-encode that decoded buffer into a standard WAV the browser can play.
-function encodeWavFromAudioBuffer(audioBuffer) {
-  const numChannels = audioBuffer.numberOfChannels;
-  const sampleRate = audioBuffer.sampleRate;
-  const numFrames = audioBuffer.length;
+// Heart recordings are captured at a very low sample rate (e.g. 500 Hz). Chrome
+// refuses to play such files in <audio> AND cannot decode them via Web Audio
+// (decodeAudioData/createBuffer reject sub-3 kHz rates), so the play button
+// stays disabled. We parse the PCM ourselves, resample up to a rate browsers
+// accept, and re-encode a standard WAV for both playback and the waveform.
+const MIN_PLAYABLE_SAMPLE_RATE = 8000;
+
+function readChunkTag(view, offset) {
+  return String.fromCharCode(
+    view.getUint8(offset),
+    view.getUint8(offset + 1),
+    view.getUint8(offset + 2),
+    view.getUint8(offset + 3),
+  );
+}
+
+// Decode a PCM/IEEE-float WAV into per-channel Float32 sample arrays. Returns
+// null for anything that isn't a plain WAV we can read (e.g. compressed audio).
+function parseWavPcm(arrayBuffer) {
+  if (arrayBuffer.byteLength < 44) return null;
+
+  const view = new DataView(arrayBuffer);
+  if (readChunkTag(view, 0) !== "RIFF" || readChunkTag(view, 8) !== "WAVE") {
+    return null;
+  }
+
+  let offset = 12;
+  let format = null;
+  let dataOffset = -1;
+  let dataLength = 0;
+
+  while (offset + 8 <= arrayBuffer.byteLength) {
+    const id = readChunkTag(view, offset);
+    const size = view.getUint32(offset + 4, true);
+    const body = offset + 8;
+
+    if (id === "fmt ") {
+      format = {
+        audioFormat: view.getUint16(body, true),
+        channels: view.getUint16(body + 2, true),
+        sampleRate: view.getUint32(body + 4, true),
+        bitsPerSample: view.getUint16(body + 14, true),
+      };
+    } else if (id === "data") {
+      dataOffset = body;
+      dataLength = Math.min(size, arrayBuffer.byteLength - body);
+    }
+
+    offset = body + size + (size % 2); // chunks are word-aligned
+  }
+
+  if (!format || dataOffset < 0 || !format.channels || !format.sampleRate) {
+    return null;
+  }
+
+  const { audioFormat, channels, sampleRate, bitsPerSample } = format;
+  const bytesPerSample = bitsPerSample / 8;
+  if (!bytesPerSample) return null;
+
+  const frameSize = bytesPerSample * channels;
+  const frameCount = Math.floor(dataLength / frameSize);
+  const channelData = Array.from(
+    { length: channels },
+    () => new Float32Array(frameCount),
+  );
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      const position = dataOffset + frame * frameSize + channel * bytesPerSample;
+      let sample;
+
+      if (audioFormat === 3 && bitsPerSample === 32) {
+        sample = view.getFloat32(position, true);
+      } else if (bitsPerSample === 16) {
+        sample = view.getInt16(position, true) / 0x8000;
+      } else if (bitsPerSample === 8) {
+        sample = (view.getUint8(position) - 128) / 128;
+      } else if (bitsPerSample === 32) {
+        sample = view.getInt32(position, true) / 0x80000000;
+      } else if (bitsPerSample === 24) {
+        let value =
+          (view.getUint8(position + 2) << 16) |
+          (view.getUint8(position + 1) << 8) |
+          view.getUint8(position);
+        if (value & 0x800000) value |= ~0xffffff;
+        sample = value / 0x800000;
+      } else {
+        return null;
+      }
+
+      channelData[channel][frame] = sample;
+    }
+  }
+
+  return { sampleRate, channelData };
+}
+
+// Linear-interpolation resample of one channel. Heart audio tops out well below
+// the source Nyquist, so interpolation introduces no audible artifacts.
+function resampleChannel(input, inputRate, outputRate) {
+  if (inputRate === outputRate || input.length === 0) return input;
+
+  const outputLength = Math.max(
+    1,
+    Math.round((input.length * outputRate) / inputRate),
+  );
+  const output = new Float32Array(outputLength);
+  const ratio = inputRate / outputRate;
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const sourceIndex = index * ratio;
+    const lower = Math.floor(sourceIndex);
+    const fraction = sourceIndex - lower;
+    const a = input[lower] || 0;
+    const b = input[Math.min(lower + 1, input.length - 1)] || 0;
+    output[index] = a + (b - a) * fraction;
+  }
+
+  return output;
+}
+
+function encodeWav(channelData, sampleRate) {
+  const numChannels = channelData.length;
+  const numFrames = numChannels ? channelData[0].length : 0;
   const blockAlign = numChannels * 2; // 16-bit samples
   const dataSize = numFrames * blockAlign;
   const buffer = new ArrayBuffer(44 + dataSize);
@@ -150,14 +265,10 @@ function encodeWavFromAudioBuffer(audioBuffer) {
   writeString(36, "data");
   view.setUint32(40, dataSize, true);
 
-  const channels = Array.from({ length: numChannels }, (_, channel) =>
-    audioBuffer.getChannelData(channel),
-  );
-
   let offset = 44;
   for (let frame = 0; frame < numFrames; frame += 1) {
     for (let channel = 0; channel < numChannels; channel += 1) {
-      const clamped = Math.max(-1, Math.min(1, channels[channel][frame]));
+      const clamped = Math.max(-1, Math.min(1, channelData[channel][frame]));
       view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
       offset += 2;
     }
@@ -212,36 +323,63 @@ export default function RecordingWaveform({ audioUrl }) {
         const arrayBuffer = await blob.arrayBuffer();
         if (cancelled) return;
 
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        // Preferred path: parse the WAV ourselves and resample up to a rate the
+        // browser can actually play, since the capture rate (~500 Hz) is too low
+        // for both <audio> and Web Audio.
+        const parsed = parseWavPcm(arrayBuffer);
+        if (parsed && parsed.channelData.length) {
+          const targetRate = Math.max(parsed.sampleRate, MIN_PLAYABLE_SAMPLE_RATE);
+          const channelData = parsed.channelData.map((channel) =>
+            resampleChannel(channel, parsed.sampleRate, targetRate),
+          );
 
-        if (!AudioContextClass) {
-          // No Web Audio: best effort with a sniffed MIME type on the raw bytes.
-          const header = new Uint8Array(arrayBuffer.slice(0, 16));
-          const mimeType = sniffAudioMimeType(header, blob.type);
-          objectUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: mimeType }));
+          objectUrl = URL.createObjectURL(encodeWav(channelData, targetRate));
           setAudioSrc(objectUrl);
           setChartState({
-            durationSeconds: 0,
-            points: createPlaceholderPoints(),
-            status: "unsupported",
+            durationSeconds: (channelData[0]?.length || 0) / targetRate,
+            points: extractWaveformPoints(channelData),
+            status: "ready",
           });
           return;
         }
 
-        audioContext = new AudioContextClass();
-        // decodeAudioData detaches its buffer, so hand it a private copy.
-        const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-        if (cancelled) return;
+        // Fallback for compressed formats: let Web Audio decode, then re-encode.
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          try {
+            audioContext = new AudioContextClass();
+            const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+            if (cancelled) return;
 
-        // Play from a WAV re-encoded at the (browser-supported) decoded sample
-        // rate so the native player accepts the otherwise-too-slow recording.
-        objectUrl = URL.createObjectURL(encodeWavFromAudioBuffer(decoded));
+            const channelData = Array.from(
+              { length: decoded.numberOfChannels },
+              (_, channel) => decoded.getChannelData(channel),
+            );
+            objectUrl = URL.createObjectURL(encodeWav(channelData, decoded.sampleRate));
+            setAudioSrc(objectUrl);
+            setChartState({
+              durationSeconds: decoded.duration,
+              points: extractWaveformPoints(channelData),
+              status: "ready",
+            });
+            return;
+          } catch (decodeError) {
+            if (cancelled) return;
+            // Fall through to raw playback below.
+          }
+        }
+
+        // Last resort: play the original bytes with a sniffed MIME type and skip
+        // the decoded waveform preview.
+        const header = new Uint8Array(arrayBuffer.slice(0, 16));
+        objectUrl = URL.createObjectURL(
+          new Blob([arrayBuffer], { type: sniffAudioMimeType(header, blob.type) }),
+        );
         setAudioSrc(objectUrl);
-
         setChartState({
-          durationSeconds: decoded.duration,
-          points: extractWaveform(decoded),
-          status: "ready",
+          durationSeconds: 0,
+          points: createPlaceholderPoints(),
+          status: "unsupported",
         });
       } catch (error) {
         if (cancelled || controller.signal.aborted) return;
