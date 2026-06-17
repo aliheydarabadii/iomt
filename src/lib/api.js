@@ -7,6 +7,7 @@ import {
   MEASUREMENT_ENDPOINT,
   PATIENT_CREATE_ENDPOINT,
   PATIENT_SEARCH_ENDPOINT,
+  RECORD_DURATION_SECONDS,
   RECORD_ENDPOINT_TEMPLATE,
   RECORD_REQUEST_TIMEOUT_MS,
 } from "@/lib/config";
@@ -226,11 +227,22 @@ async function fetchMeasurement(patient, signal) {
 // recording and the backend stores the result (no separate stop call). Native
 // fetch has no default timeout, so we add an AbortController guard set well
 // above the record duration to avoid hanging forever on a stalled sensor.
-async function recordMeasurement(patientId, areaId, { url } = {}) {
+async function recordMeasurement(
+  patientId,
+  areaId,
+  { url, durationSeconds = RECORD_DURATION_SECONDS } = {},
+) {
   const recordUrl = url ? resolveApiUrl(url) : buildRecordEndpointUrl(patientId);
 
   if (!recordUrl) {
     throw new Error("Missing patient id for the record request.");
+  }
+
+  const requestedDurationSeconds = Number(durationSeconds);
+  const payload = { areaId };
+  if (Number.isFinite(requestedDurationSeconds) && requestedDurationSeconds > 0) {
+    payload.durationSeconds = requestedDurationSeconds;
+    payload.durationMs = Math.round(requestedDurationSeconds * 1000);
   }
 
   const controller = new AbortController();
@@ -244,7 +256,7 @@ async function recordMeasurement(patientId, areaId, { url } = {}) {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ areaId }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
   } catch (error) {

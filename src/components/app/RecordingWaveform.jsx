@@ -306,6 +306,7 @@ export default function RecordingWaveform({ audioUrl }) {
         status: "loading",
       });
       setAudioSrc("");
+      setMediaDuration(0);
 
       try {
         const response = await fetch(audioUrl, {
@@ -434,7 +435,7 @@ export default function RecordingWaveform({ audioUrl }) {
   const plotBottom = VIEWBOX_HEIGHT - PADDING.bottom;
   const plotWidth = VIEWBOX_WIDTH - PADDING.left - PADDING.right;
   const centerY = PADDING.top + (plotBottom - PADDING.top) / 2;
-  const effectiveDuration = mediaDuration || chartState.durationSeconds;
+  const effectiveDuration = chartState.durationSeconds || mediaDuration;
   const durationLabel = formatDurationLabel(effectiveDuration);
   const tickValues = [0, effectiveDuration / 2, effectiveDuration];
   const tickLabels = tickValues.map((value) => formatDurationLabel(value));

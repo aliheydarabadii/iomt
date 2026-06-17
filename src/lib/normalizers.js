@@ -68,6 +68,76 @@ function buildRecordingAudioUrl(recordId, explicitUrl) {
   );
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+
+    const number = Number(value);
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+
+  return null;
+}
+
+function normalizeDurationMs(record) {
+  const explicitMs = firstFiniteNumber(
+    record.durationMs,
+    record.duration_ms,
+    record.durationMillis,
+    record.duration_millis,
+    record.lengthMs,
+    record.length_ms,
+  );
+  if (explicitMs !== null) {
+    return Math.max(0, explicitMs);
+  }
+
+  const explicitSeconds = firstFiniteNumber(
+    record.durationSeconds,
+    record.duration_seconds,
+    record.durationSec,
+    record.duration_s,
+    record.lengthSeconds,
+    record.length_seconds,
+  );
+  if (explicitSeconds !== null) {
+    return Math.max(0, explicitSeconds * 1000);
+  }
+
+  const sampleCount = firstFiniteNumber(
+    record.sampleCount,
+    record.sample_count,
+    record.samples,
+    record.frameCount,
+    record.frame_count,
+  );
+  const sampleRate = firstFiniteNumber(
+    record.sampleRateHz,
+    record.sample_rate_hz,
+    record.sampleRate,
+    record.sample_rate,
+  );
+  if (sampleCount !== null && sampleRate !== null && sampleRate > 0) {
+    return Math.max(0, (sampleCount / sampleRate) * 1000);
+  }
+
+  const ambiguousDuration = firstFiniteNumber(record.duration);
+  if (ambiguousDuration === null) {
+    return 0;
+  }
+
+  // Prefer seconds for small bare `duration` values; legacy payloads used
+  // millisecond values here, so keep larger numbers unchanged.
+  return Math.max(
+    0,
+    ambiguousDuration < 1000 ? ambiguousDuration * 1000 : ambiguousDuration,
+  );
+}
+
 function normalizeRecord(record, index) {
   const id = record.id || `record-${index}`;
 
@@ -77,7 +147,7 @@ function normalizeRecord(record, index) {
     areaLabel: record.areaLabel || record.siteLabel || "Unknown site",
     areaShort: record.areaShort || record.siteDescription || "No site detail",
     capturedAt: toTimestamp(record.capturedAt || record.createdAt),
-    durationMs: Number(record.durationMs || record.duration || 0),
+    durationMs: normalizeDurationMs(record),
     status: record.status || "Stored on server",
     audioUrl: buildRecordingAudioUrl(
       id,
