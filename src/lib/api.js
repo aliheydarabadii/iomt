@@ -107,6 +107,7 @@ function buildRecordingAnalyticsUrl(recordId) {
 
   url.searchParams.set("includeSignals", String(ANALYTICS_INCLUDE_SIGNALS));
   url.searchParams.set("maxPoints", String(ANALYTICS_MAX_POINTS));
+  url.searchParams.set("saveFilteredWav", "true");
 
   return url.toString();
 }
@@ -303,6 +304,34 @@ async function runRecordingAnalysis(recordId) {
   return body;
 }
 
+async function deleteRecording(recordId) {
+  if (!recordId) {
+    throw new Error("Missing recording id.");
+  }
+
+  const response = await fetch(
+    resolveApiUrl(`/api/heart-recordings/${encodeURIComponent(recordId)}`),
+    {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+      },
+    },
+  );
+  const body = await readJsonBody(response);
+
+  if (!response.ok) {
+    throw new Error(
+      getResponseErrorMessage(
+        body,
+        `Recording deletion failed with ${response.status}`,
+      ),
+    );
+  }
+
+  return body;
+}
+
 export {
   buildRecordingAnalyticsUrl,
   buildRecordEndpointUrl,
@@ -312,4 +341,5 @@ export {
   runRecordingAnalysis,
   searchPatientsByName,
   createPatient,
+  deleteRecording,
 };

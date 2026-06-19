@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { LoaderCircle, Trash2 } from "lucide-react";
 import AnalyticsResultPanel from "@/components/app/AnalyticsResultPanel";
 import DetailChip from "@/components/app/DetailChip";
 import HistoryCard from "@/components/app/HistoryCard";
+import RecordingSignalProgress from "@/components/app/RecordingSignalProgress";
 import SignalStrip from "@/components/app/SignalStrip";
 import StepPill from "@/components/app/StepPill";
 import SummaryTile from "@/components/app/SummaryTile";
@@ -49,13 +51,15 @@ export default function MeasurementPage({
   recordSeconds,
   recordDurationSeconds,
   onRecord,
+  onRemoveRecording,
   onBack,
 }) {
   if (!patient) return null;
 
   const latestRecord = measurement.records[0] || null;
-  const historyRecords =
-    measurement.records.length > 0 ? measurement.records : patient.recordings;
+  const historyRecords = measurement.updatedAt
+    ? measurement.records
+    : patient.recordings;
   const [activeTab, setActiveTab] = useState("console");
   const [selectedAnalyticsRecordId, setSelectedAnalyticsRecordId] = useState(
     historyRecords[0]?.id || "",
@@ -64,6 +68,8 @@ export default function MeasurementPage({
   const [analyticsError, setAnalyticsError] = useState("");
   const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
   const [lastAnalyzedRecordId, setLastAnalyzedRecordId] = useState("");
+  const [removingRecordId, setRemovingRecordId] = useState("");
+  const [removeError, setRemoveError] = useState("");
 
   useEffect(() => {
     if (
@@ -99,6 +105,39 @@ export default function MeasurementPage({
       );
     } finally {
       setIsAnalyticsLoading(false);
+    }
+  }
+
+  async function handleRemoveRecord(record) {
+    if (!record || removingRecordId) return;
+    const confirmed = window.confirm(
+      `Remove the ${record.areaLabel} recording from ${formatCaptureTime(record.capturedAt)}? This permanently deletes its database entry and audio files.`,
+    );
+    if (!confirmed) return;
+
+    setRemovingRecordId(record.id);
+    setRemoveError("");
+    try {
+      const nextMeasurement = await onRemoveRecording(record.id);
+      const remainingRecords =
+        nextMeasurement?.records ||
+        historyRecords.filter((item) => item.id !== record.id);
+      const nextSelectedId = remainingRecords[0]?.id || "";
+
+      if (selectedAnalyticsRecordId === record.id) {
+        setSelectedAnalyticsRecordId(nextSelectedId);
+      }
+      if (lastAnalyzedRecordId === record.id) {
+        setAnalyticsResult(null);
+        setLastAnalyzedRecordId("");
+        setAnalyticsError("");
+      }
+    } catch (error) {
+      setRemoveError(
+        error instanceof Error ? error.message : "Unable to remove recording.",
+      );
+    } finally {
+      setRemovingRecordId("");
     }
   }
 
@@ -196,7 +235,7 @@ export default function MeasurementPage({
 
         {activeTab === "console" ? (
           <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.12fr)_390px]">
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6">
               <HeartAuscultationMap
                 referenceImageSrc={referenceImage}
                 defaultSelectedId={DEFAULT_SELECTED_ID}
@@ -230,7 +269,12 @@ export default function MeasurementPage({
                   {historyRecords.length ? (
                     <div className="grid gap-4 lg:grid-cols-2">
                       {historyRecords.map((record) => (
-                        <HistoryCard key={record.id} record={record} />
+                        <HistoryCard
+                          key={record.id}
+                          record={record}
+                          onRemove={handleRemoveRecord}
+                          isRemoving={removingRecordId === record.id}
+                        />
                       ))}
                     </div>
                   ) : (
@@ -244,6 +288,12 @@ export default function MeasurementPage({
                       </p>
                     </div>
                   )}
+
+                  {removeError ? (
+                    <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                      {removeError}
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             </div>
@@ -329,10 +379,29 @@ export default function MeasurementPage({
                 </CardContent>
               </Card>
 
-              <SignalStrip
-                history={measurement.currentSession.waveform}
-                isRecording={sessionActive}
-              />
+              {sessionActive ? (
+                <RecordingSignalProgress
+                  waveform={measurement.currentSession.recordedWaveform}
+                  progress={measurement.currentSession.recordingProgress}
+                  capturedSampleCount={
+                    measurement.currentSession.capturedSampleCount
+                  }
+                  expectedSampleCount={
+                    measurement.currentSession.expectedSampleCount
+                  }
+                  elapsedSeconds={Math.max(
+                    recordSeconds,
+                    measurement.currentSession.runtimeMs / 1000,
+                  )}
+                  durationSeconds={recordDurationSeconds}
+                  signalQuality={measurement.currentSession.signalQuality}
+                />
+              ) : (
+                <SignalStrip
+                  history={measurement.currentSession.waveform}
+                  isRecording={false}
+                />
+              )}
 
               {errorMessage ? (
                 <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
@@ -342,8 +411,8 @@ export default function MeasurementPage({
             </div>
           </div>
         ) : (
-          <div className="mt-6 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <div className="space-y-6">
+          <div className="mt-6 min-w-0 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="min-w-0 space-y-6">
               <Card className="overflow-hidden rounded-[30px] border border-white/70 bg-white/92 shadow-[0_26px_70px_-34px_rgba(15,23,42,0.38)] backdrop-blur-sm">
                 <CardHeader className="border-b border-slate-200/80 pb-5">
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">
@@ -378,38 +447,59 @@ export default function MeasurementPage({
                       </p>
                       <div className="space-y-2">
                         {historyRecords.map((record) => (
-                          <button
+                          <div
                             key={record.id}
-                            type="button"
-                            onClick={() => setSelectedAnalyticsRecordId(record.id)}
                             className={[
-                              "w-full rounded-[20px] border px-4 py-4 text-left transition-colors",
+                              "flex items-start gap-2 rounded-[20px] border p-2 transition-colors",
                               selectedAnalyticsRecordId === record.id
                                 ? "border-sky-200 bg-sky-50"
                                 : "border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-white",
                             ].join(" ")}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-base font-semibold text-slate-950">
-                                  {record.areaLabel}
-                                </p>
-                                <p className="mt-1 text-sm text-slate-600">
-                                  {formatCaptureTime(record.capturedAt)}
-                                </p>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedAnalyticsRecordId(record.id)}
+                              className="min-w-0 flex-1 rounded-[14px] px-2 py-2 text-left"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-base font-semibold text-slate-950">
+                                    {record.areaLabel}
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-600">
+                                    {formatCaptureTime(record.capturedAt)}
+                                  </p>
+                                </div>
+                                <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                                  {formatRuntime(record.durationMs)}
+                                </span>
                               </div>
-                              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">
-                                {formatRuntime(record.durationMs)}
-                              </span>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {selectedAnalyticsRecordId === record.id ? (
-                                <DetailChip tone="sky">Selected</DetailChip>
-                              ) : null}
-                              <DetailChip>{record.id}</DetailChip>
-                              <DetailChip>{record.status}</DetailChip>
-                            </div>
-                          </button>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {selectedAnalyticsRecordId === record.id ? (
+                                  <DetailChip tone="sky">Selected</DetailChip>
+                                ) : null}
+                                <DetailChip>{record.id}</DetailChip>
+                                <DetailChip>{record.status}</DetailChip>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveRecord(record)}
+                              disabled={Boolean(removingRecordId)}
+                              title="Remove recording"
+                              aria-label={`Remove ${record.areaLabel} recording`}
+                              className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {removingRecordId === record.id ? (
+                                <LoaderCircle
+                                  className="h-4 w-4 animate-spin"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                              )}
+                            </button>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -445,15 +535,26 @@ export default function MeasurementPage({
                       {analyticsError}
                     </div>
                   ) : null}
+
+                  {removeError ? (
+                    <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                      {removeError}
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             </div>
 
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6">
               {analyticsResult ? (
                 <AnalyticsResultPanel
                   result={analyticsResult}
-                  record={selectedAnalyticsRecord}
+                  patient={patient}
+                  record={
+                    historyRecords.find(
+                      (record) => record.id === lastAnalyzedRecordId,
+                    ) || selectedAnalyticsRecord
+                  }
                 />
               ) : (
                 <Card className="overflow-hidden rounded-[30px] border border-white/70 bg-white/92 shadow-[0_26px_70px_-34px_rgba(15,23,42,0.38)] backdrop-blur-sm">

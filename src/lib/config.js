@@ -76,6 +76,10 @@ const EMPTY_MEASUREMENT = {
     signalQuality: "Unavailable",
     activeAreaId: DEFAULT_SELECTED_ID,
     waveform: createIdleWaveform(),
+    capturedSampleCount: 0,
+    expectedSampleCount: 0,
+    recordingProgress: 0,
+    recordedWaveform: [],
   },
   controls: {
     canRecord: false,

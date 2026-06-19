@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { HEART_AUSCULTATION_AREAS } from "@/components/HeartAuscultationMap";
 import {
   createPatient,
+  deleteRecording,
   fetchMeasurement,
   recordMeasurement,
   searchPatientsByName,
@@ -92,14 +93,17 @@ export default function App() {
 
     setIsMeasurementLoading(true);
     loadMeasurement();
-    const intervalId = window.setInterval(loadMeasurement, POLL_INTERVAL_MS);
+    const intervalId = window.setInterval(
+      loadMeasurement,
+      isRecordPending ? 500 : POLL_INTERVAL_MS,
+    );
 
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(intervalId);
     };
-  }, [currentPage, selectedPatient]);
+  }, [currentPage, isRecordPending, selectedPatient]);
 
   // Drive the "Recording… (N seconds)" busy state while the blocking record
   // request is in flight.
@@ -214,6 +218,20 @@ export default function App() {
     }
   }
 
+  async function handleRemoveRecording(recordId) {
+    if (!selectedPatient || !recordId) return null;
+
+    await deleteRecording(recordId);
+    const nextMeasurement = await fetchMeasurement(selectedPatient);
+    setMeasurement(nextMeasurement);
+    setSelectedPatient((current) =>
+      current?.id === selectedPatient.id
+        ? { ...current, recordings: nextMeasurement.records }
+        : current,
+    );
+    return nextMeasurement;
+  }
+
   if (currentPage === "lookup") {
     return (
       <LookupPage
@@ -270,6 +288,7 @@ export default function App() {
       recordSeconds={recordSeconds}
       recordDurationSeconds={RECORD_DURATION_SECONDS}
       onRecord={handleRecord}
+      onRemoveRecording={handleRemoveRecording}
       onBack={() => setCurrentPage("lookup")}
     />
   );
