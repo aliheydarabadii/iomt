@@ -177,6 +177,28 @@ function normalizeMeasurementResponse(payload) {
       signalQuality: session.signalQuality || session.quality || "Unavailable",
       activeAreaId: session.activeAreaId || session.areaId || DEFAULT_SELECTED_ID,
       waveform: normalizeWaveform(session.waveform || payload.waveform),
+      capturedSampleCount: Math.max(
+        0,
+        Number(session.capturedSampleCount || session.captured_sample_count || 0),
+      ),
+      expectedSampleCount: Math.max(
+        0,
+        Number(session.expectedSampleCount || session.expected_sample_count || 0),
+      ),
+      recordingProgress: Math.min(
+        1,
+        Math.max(
+          0,
+          Number(session.recordingProgress || session.recording_progress || 0),
+        ),
+      ),
+      recordedWaveform: Array.isArray(
+        session.recordedWaveform || session.recorded_waveform,
+      )
+        ? (session.recordedWaveform || session.recorded_waveform)
+            .map((value) => Number(value))
+            .filter(Number.isFinite)
+        : [],
     },
     controls: {
       canRecord: hasRecordControl
